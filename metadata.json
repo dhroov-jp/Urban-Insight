@@ -1,0 +1,7 @@
+{
+  "name": "UrbanPulse: Smart City Heatmap Analytics",
+  "description": "A production-ready urban data visualization platform for analyzing traffic, pollution, and density patterns using interactive heatmaps.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
