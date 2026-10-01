@@ -1,0 +1,14 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+server/.venv/
+server/__pycache__/
+server/**/__pycache__/
+server/data/cache.db*
+server/data/thumbnails/*.png
+!server/data/thumbnails/.gitkeep
