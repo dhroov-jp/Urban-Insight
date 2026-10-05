@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
     # --- Reservoirs ---
-    RESERVOIR_SCRAPER_URL: str = "http://localhost:8000/api/reservoirs/mock-source"
+    RESERVOIR_SCRAPER_URL: str = ""
     RESERVOIR_DEMAND_ML_DAY: float = 4200.0
 
     # --- Live External API Keys ---

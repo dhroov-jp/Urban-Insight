@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import Papa from 'papaparse';
@@ -48,6 +48,7 @@ import { DataPoint, URBAN_LAYERS, INITIAL_DATA } from './types';
 import HeatmapLayer from './components/HeatmapLayer';
 import DrawAOILayer from './components/DrawAOILayer';
 import ConstructionChangeLayer from './components/ConstructionChangeLayer';
+import { MapSearchMarker } from './components/MapSearchMarker';
 import { ConstructionControlPanel, ConstructionResultsPanel } from './components/ConstructionDeck';
 import { LightingControlPanel, LightingResultsPanel } from './components/LightingDeck';
 import { ReservoirControlPanel, ReservoirResultsPanel } from './components/ReservoirDeck';
@@ -66,6 +67,8 @@ import {
   type OverflowEvent
 } from './lib/reservoirApi';
 import { checkLightingAdequacy, type LightingCheckResponse } from './lib/lightingApi';
+import { geocodeLocation, type GeocodingResult } from './lib/geocoding';
+import { formatDate, formatDateTime } from './lib/date';
 import { Moon } from 'lucide-react';
 
 
@@ -137,6 +140,25 @@ const MapEvents = ({ onMapClick }: MapEventsProps) => {
   return null;
 };
 
+const MapResizeHandler = () => {
+  const map = useMap();
+  useEffect(() => {
+    const handleResize = () => {
+      map.invalidateSize();
+    };
+    handleResize();
+    const timer1 = setTimeout(handleResize, 150);
+    const timer2 = setTimeout(handleResize, 500);
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+    };
+  }, [map]);
+  return null;
+};
+
 export default function App() {
   const [view, setView] = useState<ViewState>('landing');
   const [activeLayerId, setActiveLayerId] = useState<string>('traffic');
@@ -145,6 +167,12 @@ export default function App() {
   const [threshold, setThreshold] = useState<number>(0);
   const [selectedPoint, setSelectedPoint] = useState<DataPoint | null>(null);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchSuggestions, setSearchSuggestions] = useState<GeocodingResult[]>([]);
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(-1);
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchedLocation, setSearchedLocation] = useState<GeocodingResult | null>(null);
   const [isLive, setIsLive] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Record<string, string>>({});
   const [criticalAlerts, setCriticalAlerts] = useState<Array<{ layer: string; location: string; value: number; unit: string }>>([]);
@@ -176,12 +204,14 @@ export default function App() {
   const [isScrapingReservoir, setIsScrapingReservoir] = useState<boolean>(false);
   const [scrapeReservoirError, setScrapeReservoirError] = useState<string | null>(null);
   const [scrapeReservoirSuccess, setScrapeReservoirSuccess] = useState<boolean>(false);
+  const [reservoirError, setReservoirError] = useState<string | null>(null);
 
   // --- Reverse Geocoding Map Click state & refs ---
   const [isGeocoding, setIsGeocoding] = useState<boolean>(false);
   const geocodeCacheRef = useRef<Record<string, string>>({});
   const geocodeTimeoutRef = useRef<any>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const searchAbortControllerRef = useRef<AbortController | null>(null);
 
   // --- Live & static urban layers state ---
   const [trafficData, setTrafficData] = useState<any>(null);
@@ -227,6 +257,7 @@ export default function App() {
 
     if (isNear && nearest) {
       // Near an existing data point: use its label directly
+      setSelectedPoint(nearest);
       setClickedPoint({
         lat,
         lng,
@@ -266,6 +297,7 @@ export default function App() {
 
     // 3. Not in cache: show raw coords first + load address debounced
     const rawLabel = `Sector ${lat.toFixed(3)}, ${lng.toFixed(3)}`;
+    setSelectedPoint(null);
     setClickedPoint({
       lat,
       lng,
@@ -341,6 +373,100 @@ export default function App() {
       }
     }, 500);
   };
+
+  const handleSearchedLocation = (location: GeocodingResult) => {
+    setSearchedLocation(location);
+    setSearchQuery(location.displayName);
+    setSearchSuggestions([]);
+    setSelectedSuggestionIndex(-1);
+    setSearchError(null);
+    setSelectedPoint(null);
+    setIsGeocoding(false);
+
+    if (geocodeTimeoutRef.current) {
+      clearTimeout(geocodeTimeoutRef.current);
+    }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    setClickedPoint({
+      lat: location.latitude,
+      lng: location.longitude,
+      label: location.displayName,
+      value: 0,
+    });
+  };
+
+  const executeLocationSearch = async (query = searchQuery) => {
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) return;
+
+    if (selectedSuggestionIndex >= 0 && searchSuggestions[selectedSuggestionIndex]) {
+      handleSearchedLocation(searchSuggestions[selectedSuggestionIndex]);
+      return;
+    }
+
+    searchAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortControllerRef.current = controller;
+    setIsSearchLoading(true);
+    setSearchError(null);
+
+    try {
+      const results = await geocodeLocation(trimmedQuery, controller.signal, 5);
+      if (results.length === 0) {
+        setSearchError('Location not found');
+        setSearchSuggestions([]);
+        return;
+      }
+      handleSearchedLocation(results[0]);
+    } catch (error: any) {
+      if (error.name !== 'AbortError') {
+        setSearchError('Unable to search locations');
+      }
+    } finally {
+      if (searchAbortControllerRef.current === controller) {
+        setIsSearchLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const trimmedQuery = searchQuery.trim();
+    if (trimmedQuery.length < 2 || searchedLocation?.displayName === searchQuery) {
+      setSearchSuggestions([]);
+      setSelectedSuggestionIndex(-1);
+      return;
+    }
+
+    searchAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortControllerRef.current = controller;
+    const timeout = window.setTimeout(async () => {
+      setIsSearchLoading(true);
+      setSearchError(null);
+      try {
+        const results = await geocodeLocation(trimmedQuery, controller.signal, 5);
+        setSearchSuggestions(results);
+        setSelectedSuggestionIndex(results.length > 0 ? 0 : -1);
+      } catch (error: any) {
+        if (error.name !== 'AbortError') {
+          setSearchSuggestions([]);
+          setSearchError('Unable to search locations');
+        }
+      } finally {
+        if (searchAbortControllerRef.current === controller) {
+          setIsSearchLoading(false);
+        }
+      }
+    }, 350);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [searchQuery, searchedLocation]);
 
   // Trigger parallel API/database queries when clickedPoint changes
   useEffect(() => {
@@ -524,6 +650,7 @@ export default function App() {
     if (activeModule !== 'reservoirs') return;
     
     const loadReservoirData = async () => {
+      setReservoirError(null);
       try {
         const sum = await fetchReservoirCurrent();
         setReservoirSummary(sum);
@@ -532,10 +659,13 @@ export default function App() {
         setReservoirOverflows(ovs);
       } catch (err) {
         console.error("Error loading current reservoirs:", err);
+        setReservoirError(err instanceof Error ? err.message : "Live reservoir data unavailable.");
       }
     };
     
     loadReservoirData();
+    const refreshTimer = window.setInterval(loadReservoirData, 30 * 60 * 1000);
+    return () => window.clearInterval(refreshTimer);
   }, [activeModule]);
 
   // Fetch history when selected lake changes or history lookback days changes
@@ -566,10 +696,12 @@ export default function App() {
       // Reload summary
       const sum = await fetchReservoirCurrent();
       setReservoirSummary(sum);
+      setReservoirError(null);
       setScrapeReservoirSuccess(true);
       setTimeout(() => setScrapeReservoirSuccess(false), 4000);
     } catch (err: any) {
       setScrapeReservoirError(err.message || "Failed to trigger scrape.");
+      setReservoirError(err.message || "Failed to refresh live reservoir data.");
     } finally {
       setIsScrapingReservoir(false);
     }
@@ -624,7 +756,7 @@ export default function App() {
   const handleGenerateReport = async () => {
     setIsLoadingReport(true);
     const report = `EXECUTIVE SUMMARY - MUMBAI URBAN OPERATIONS
-Generated: ${new Date().toLocaleString()}
+Generated: ${formatDateTime(new Date())}
 
 TRAFFIC CONGESTION: Peak congestion at Andheri Station (100%), BKC (100%), and Dadar TT (100%). Recommend signal optimization and traffic diversions on alternative routes.
 
@@ -654,6 +786,12 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
     const maxVal = Math.max(...filteredData.map(p => p.value), 1);
     return filteredData.map(p => [p.latitude, p.longitude, p.value / maxVal] as [number, number, number]);
   }, [filteredData]);
+
+  const isInspectorOpen = activeModule === 'reservoirs'
+    ? Boolean(selectedLakeName)
+    : activeModule === 'construction'
+      ? Boolean(clickedPoint || constructionResult)
+      : Boolean(clickedPoint);
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1253,7 +1391,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
               onClick={() => {
                 const element = document.createElement('a');
                 element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(reportContent));
-                element.setAttribute('download', `urban_report_${new Date().toISOString().split('T')[0]}.txt`);
+                element.setAttribute('download', `urban_report_${formatDate(new Date())}.txt`);
                 element.style.display = 'none';
                 document.body.appendChild(element);
                 element.click();
@@ -1272,8 +1410,8 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
 
   return (
     <div className={cn(
-      "min-h-screen w-full bg-[#050505] text-white font-sans selection:bg-emerald-500 selection:text-black",
-      view === 'landing' ? "overflow-y-visible" : "h-screen overflow-hidden"
+      "w-screen h-screen relative bg-[#050505] text-white font-sans selection:bg-emerald-500 selection:text-black",
+      view === 'landing' ? "overflow-y-auto" : "overflow-hidden"
     )}>
       {/* Upload Success Toast */}
       <AnimatePresence>
@@ -1303,21 +1441,23 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
       </AnimatePresence>
       {/* Background Map (Visible in Map View or as Blur in others) */}
       <div className={cn(
-        "fixed inset-0 z-0 transition-all duration-1000",
+        "fixed inset-0 top-0 left-0 w-screen h-screen z-0 map-viewport-container transition-all duration-1000",
         view === 'map' ? "opacity-100" : "opacity-30 blur-md scale-110"
       )}>
         <MapContainer 
           center={[19.0760, 72.8777]} 
-          zoom={12} 
+          zoom={12.5} 
           className="h-full w-full"
           zoomControl={false}
         >
+          <MapResizeHandler />
           <TileLayer
             attribution='&copy; <a href="https://www.esri.com/">Esri</a>'
             url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
           />
           {activeModule === 'urban' && <HeatmapLayer points={heatmapPoints} />}
           {(activeModule === 'urban' || activeModule === 'construction' || activeModule === 'lighting') && <MapEvents onMapClick={handleMapClick} />}
+          <MapSearchMarker location={searchedLocation} onSelect={handleSearchedLocation} />
           <DrawAOILayer
             active={view === 'map' && activeModule === 'construction'}
             onAOIChange={(geojson) => {
@@ -1330,16 +1470,16 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
           
           {/* Reservoir Supply Lake Markers */}
           {activeModule === 'reservoirs' && reservoirSummary?.readings.map((lake) => {
-            const isSelected = selectedLakeName === lake.lake_name;
-            const isGreen = lake.percent_stock >= 75;
-            const isAmber = lake.percent_stock >= 40 && lake.percent_stock < 75;
+            const isSelected = selectedLakeName === lake.reservoirName;
+            const isGreen = lake.percentage >= 90;
+            const isAmber = lake.percentage >= 70 && lake.percentage < 90;
             let colorHex = '#ef4444'; // Red
             if (isGreen) colorHex = '#10b981'; // Green
             else if (isAmber) colorHex = '#f59e0b'; // Amber
 
             return (
               <Marker
-                key={`reservoir-${lake.lake_name}`}
+                key={`reservoir-${lake.reservoirName}`}
                 position={[lake.latitude, lake.longitude]}
                 icon={L.divIcon({
                   className: 'custom-div-icon',
@@ -1352,27 +1492,27 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                 })}
                 eventHandlers={{
                   click: () => {
-                    setSelectedLakeName(lake.lake_name);
+                    setSelectedLakeName(lake.reservoirName);
                   }
                 }}
               >
                 <Popup className="urban-popup">
                   <div className="p-3 bg-[#0a0a0a] text-white border border-white/10 rounded-xl shadow-2xl min-w-[150px]">
                     <p className="text-[9px] font-black uppercase tracking-widest text-emerald-400 mb-1">Mumbai Reservoir</p>
-                    <h4 className="text-sm font-bold uppercase tracking-tight leading-none mb-1">{lake.lake_name}</h4>
+                    <h4 className="text-sm font-bold uppercase tracking-tight leading-none mb-1">{lake.reservoirName}</h4>
                     <div className="mt-2 pt-2 border-t border-white/5 space-y-1 text-xs">
                       <div className="flex justify-between">
                         <span className="text-white/40 font-bold uppercase text-[8px]">Stock %</span>
-                        <span className="font-black text-emerald-400">{lake.percent_stock}%</span>
+                        <span className="font-black text-emerald-400">{lake.percentage}%</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-white/40 font-bold uppercase text-[8px]">Stock Vol</span>
-                        <span className="font-bold">{Math.round(lake.content_ml).toLocaleString()} ML</span>
+                        <span className="font-bold">{Math.round(lake.storageML).toLocaleString()} ML</span>
                       </div>
-                      {lake.rainfall_mm_24hr > 0 && (
+                      {lake.rainfall24h !== null && lake.rainfall24h > 0 && (
                         <div className="flex justify-between">
                           <span className="text-white/40 font-bold uppercase text-[8px]">24h Rain</span>
-                          <span className="font-bold text-sky-400">+{lake.rainfall_mm_24hr}mm</span>
+                          <span className="font-bold text-sky-400">+{lake.rainfall24h}mm</span>
                         </div>
                       )}
                     </div>
@@ -1382,66 +1522,27 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
             );
           })}
           
-          {(activeModule === 'urban' || activeModule === 'construction' || activeModule === 'lighting') && clickedPoint && (
-            <Popup 
-              position={[clickedPoint.lat, clickedPoint.lng]} 
-              eventHandlers={{ remove: () => setClickedPoint(null) }}
-              className="urban-popup"
-            >
-              <div className="p-3 bg-[#0a0a0a] text-white border border-white/10 rounded-xl shadow-2xl min-w-[160px]">
-                <div className="flex items-center space-x-2 mb-2">
-                  <Globe className="w-3 h-3 text-emerald-400" />
-                  <p className="text-[10px] font-black uppercase tracking-widest text-emerald-400">Location Identified</p>
-                </div>
-                {isGeocoding ? (
-                  <div className="flex items-center space-x-1.5 py-1 mb-1">
-                    <Loader2 className="w-3 h-3 animate-spin text-emerald-400" />
-                    <span className="text-[9px] font-bold uppercase tracking-widest text-white/40 animate-pulse">Resolving...</span>
-                  </div>
-                ) : (
-                  <h4 className="text-lg font-black italic uppercase tracking-tight leading-none mb-1">{clickedPoint.label}</h4>
-                )}
-                <div className="mt-3 pt-3 border-t border-white/5 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[8px] text-white/40 uppercase font-bold">
-                      {activeModule === 'construction' ? 'Module' : activeModule === 'lighting' ? 'Module' : 'Active Layer'}
-                    </span>
-                    <span className="text-[10px] font-bold text-white/80">
-                      {activeModule === 'construction' ? 'Construction Monitoring' : activeModule === 'lighting' ? 'Nighttime Lighting' : activeLayer.name}
-                    </span>
-                  </div>
-                  {activeModule !== 'lighting' && clickedPoint.value > 0 && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-[8px] text-white/40 uppercase font-bold">Local Intensity</span>
-                      <span className="text-xs font-black text-emerald-400">{clickedPoint.value}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </Popup>
-          )}
-
           {activeModule === 'urban' && filteredData.map((point, idx) => (
             <Marker 
               key={`${activeLayerId}-${idx}`} 
               position={[point.latitude, point.longitude]}
               icon={L.divIcon({
                 className: 'custom-div-icon',
-                html: `<div class="w-4 h-4 rounded-full bg-white/10 border border-white/20 backdrop-blur-sm animate-pulse"></div>`,
-                iconSize: [16, 16],
-                iconAnchor: [8, 8]
+                html: `<div class="relative flex items-center justify-center">
+                  ${selectedPoint === point ? '<div class="absolute w-10 h-10 rounded-full border-2 border-emerald-400 animate-ping opacity-80"></div>' : ''}
+                  <div class="relative z-10 rounded-full ${selectedPoint === point ? 'w-6 h-6 bg-emerald-400 border-2 border-white shadow-[0_0_18px_rgba(16,185,129,0.9)]' : 'w-4 h-4 bg-white/10 border border-white/20 backdrop-blur-sm animate-pulse'}"></div>
+                </div>`,
+                iconSize: selectedPoint === point ? [40, 40] : [16, 16],
+                iconAnchor: selectedPoint === point ? [20, 20] : [8, 8]
               })}
+              eventHandlers={{
+                click: (event) => {
+                  event.originalEvent.stopPropagation();
+                  setSelectedPoint(point);
+                  handleMapClick(point.latitude, point.longitude);
+                }
+              }}
             >
-              <Popup className="urban-popup">
-                <div className="p-2 bg-[#0a0a0a] text-white border border-white/10 rounded-xl shadow-2xl min-w-[120px]">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-emerald-400 mb-1">{activeLayer.name}</p>
-                  <p className="text-sm font-bold italic uppercase tracking-tight">{point.label || 'Unknown Sector'}</p>
-                  <div className="mt-2 pt-2 border-t border-white/5 flex items-center justify-between">
-                    <span className="text-[8px] text-white/40 uppercase font-bold">Intensity</span>
-                    <span className="text-xs font-black">{point.value}</span>
-                  </div>
-                </div>
-              </Popup>
             </Marker>
           ))}
         </MapContainer>
@@ -1485,26 +1586,72 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                   </div>
                 </button>
 
-                <div className={cn(
-                  "glass rounded-2xl flex items-center px-4 py-2 transition-all duration-500 border-white/5",
-                  isSearchFocused ? "w-96 border-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.1)]" : "w-64"
-                )}>
-                  <Search className="w-4 h-4 text-white/40 mr-3" />
-                  <input 
-                    type="text" 
-                    placeholder="Search urban nodes..." 
-                    onFocus={() => setIsSearchFocused(true)}
-                    onBlur={() => setIsSearchFocused(false)}
-                    className="bg-transparent border-none outline-none text-xs font-medium w-full placeholder:text-white/20"
-                  />
+                <div className="relative">
+                  <div className={cn(
+                    "glass rounded-2xl flex items-center px-4 py-2 transition-all duration-500 border-white/5",
+                    isSearchFocused ? "w-96 border-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.1)]" : "w-64"
+                  )}>
+                    <Search className="w-4 h-4 text-white/40 mr-3 flex-shrink-0" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      placeholder="Search urban nodes..."
+                      onFocus={() => setIsSearchFocused(true)}
+                      onChange={(event) => {
+                        setSearchQuery(event.target.value);
+                        setSearchError(null);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          executeLocationSearch();
+                        } else if (event.key === 'ArrowDown' && searchSuggestions.length > 0) {
+                          event.preventDefault();
+                          setSelectedSuggestionIndex((current) => Math.min(current + 1, searchSuggestions.length - 1));
+                        } else if (event.key === 'ArrowUp' && searchSuggestions.length > 0) {
+                          event.preventDefault();
+                          setSelectedSuggestionIndex((current) => Math.max(current - 1, 0));
+                        } else if (event.key === 'Escape') {
+                          setSearchSuggestions([]);
+                          setSelectedSuggestionIndex(-1);
+                          setIsSearchFocused(false);
+                        }
+                      }}
+                      className="bg-transparent border-none outline-none text-xs font-medium w-full placeholder:text-white/20"
+                    />
+                    {isSearchLoading && <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin flex-shrink-0" />}
+                  </div>
+
+                  {isSearchFocused && (searchSuggestions.length > 0 || searchError) && (
+                    <div className="absolute top-full left-0 right-0 mt-2 glass rounded-2xl p-2 border-white/10 shadow-2xl z-[60]">
+                      {searchSuggestions.map((suggestion, index) => (
+                        <button
+                          key={suggestion.placeId}
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => handleSearchedLocation(suggestion)}
+                          className={cn(
+                            "w-full text-left rounded-xl px-3 py-2.5 transition-colors",
+                            index === selectedSuggestionIndex ? "bg-emerald-500/15 text-white" : "text-white/65 hover:bg-white/5 hover:text-white"
+                          )}
+                        >
+                          <span className="block text-[10px] font-bold leading-tight">{suggestion.displayName}</span>
+                          <span className="block text-[8px] uppercase tracking-widest text-white/30 mt-1">Location match</span>
+                        </button>
+                      ))}
+                      {searchSuggestions.length === 0 && searchError && (
+                        <p className="px-3 py-2 text-[10px] font-bold text-rose-400">{searchError}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Module Switcher: Urban Layers vs Construction Monitoring */}
-                <div className="glass rounded-2xl p-1 flex items-center space-x-1 border-white/5">
+                <div className="glass rounded-2xl p-1 flex items-center gap-1 border-white/5 ui-module-tabs">
                   <button
                     onClick={() => setActiveModule('urban')}
                     className={cn(
-                      "flex items-center space-x-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                      "ui-module-tab flex items-center justify-center space-x-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
                       activeModule === 'urban' ? "bg-emerald-500 text-black" : "text-white/40 hover:text-white/70"
                     )}
                   >
@@ -1514,7 +1661,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                   <button
                     onClick={() => setActiveModule('construction')}
                     className={cn(
-                      "flex items-center space-x-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                      "ui-module-tab flex items-center justify-center space-x-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
                       activeModule === 'construction' ? "bg-emerald-500 text-black" : "text-white/40 hover:text-white/70"
                     )}
                   >
@@ -1527,7 +1674,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                       setSelectedLakeName(null);
                     }}
                     className={cn(
-                      "flex items-center space-x-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                      "ui-module-tab flex items-center justify-center space-x-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
                       activeModule === 'reservoirs' ? "bg-emerald-500 text-black" : "text-white/40 hover:text-white/70"
                     )}
                   >
@@ -1537,7 +1684,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                   <button
                     onClick={() => setActiveModule('lighting')}
                     className={cn(
-                      "flex items-center space-x-2 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                      "ui-module-tab flex items-center justify-center space-x-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
                       activeModule === 'lighting' ? "bg-emerald-500 text-black" : "text-white/40 hover:text-white/70"
                     )}
                   >
@@ -1548,7 +1695,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
               </div>
 
               <div className="flex items-center space-x-4 pointer-events-auto">
-                <button className="glass glass-hover p-2.5 rounded-xl">
+                <button aria-label="Notifications" className="ui-icon-button glass glass-hover">
                   <Bell className="w-5 h-5 text-white/60" />
                 </button>
                 <div className="glass rounded-2xl p-1 flex items-center space-x-3 pl-3 pr-1 border-white/10">
@@ -1560,7 +1707,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
               </div>
             </header>
 
-            <div className="absolute left-8 top-24 bottom-24 w-80 z-40 flex flex-col space-y-6 pointer-events-auto">
+            <div className="absolute left-4 lg:left-8 top-24 bottom-16 w-[min(20rem,calc(100vw-2rem))] z-40 flex flex-col space-y-6 pointer-events-auto">
               {activeModule === 'reservoirs' ? (
                 <ReservoirControlPanel
                   summary={reservoirSummary}
@@ -1590,22 +1737,26 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
               ) : (
                 <>
               {/* Layer Deck */}
-              <div className="glass rounded-3xl p-6 flex flex-col space-y-6 border-white/5">
-                <div className="flex items-center justify-between">
+              <div className="ui-panel flex flex-col space-y-6 border-white/5 overflow-y-auto max-h-[calc(100vh-8rem)] scrollbar-thin">
+                <div className="ui-panel-header">
                   <div className="flex items-center space-x-2">
-                    <Layers className="w-4 h-4 text-emerald-400" />
-                    <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Urban Layers</h2>
+                    <Layers className="ui-panel-icon" />
+                    <h2 className="ui-panel-title">Urban Layers</h2>
                   </div>
-                  <div className="px-2 py-0.5 glass rounded-full text-[8px] font-bold text-emerald-400 uppercase tracking-widest">Active</div>
+                  <span className="ui-status-badge ui-status-badge--emerald">Active</span>
                 </div>
 
                 <div className="grid grid-cols-1 gap-3">
                   {URBAN_LAYERS.map((layer) => (
                     <button
                       key={layer.id}
-                      onClick={() => setActiveLayerId(layer.id)}
+                      onClick={() => {
+                        setActiveLayerId(layer.id);
+                        setSelectedPoint(null);
+                        setClickedPoint(null);
+                      }}
                       className={cn(
-                        "flex items-center p-4 rounded-2xl transition-all duration-300 group relative overflow-hidden",
+                        "flex items-center min-h-16 p-3 rounded-2xl transition-all duration-300 group relative overflow-hidden",
                         activeLayerId === layer.id 
                           ? "bg-emerald-500/10 border border-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.05)]" 
                           : "hover:bg-white/5 border border-transparent"
@@ -1642,13 +1793,21 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
 
             {/* Right Analytics Deck */}
 
-            <div className={cn(
-              "absolute top-24 bottom-24 z-40 flex flex-col space-y-6 pointer-events-auto",
-              activeModule === 'construction' ? "right-28 w-80" : "right-8 w-96"
-            )}>
+            <AnimatePresence>
+              {isInspectorOpen && (
+                <motion.div
+                  initial={{ opacity: 0, x: 28 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 28 }}
+                  transition={{ duration: 0.28, ease: 'easeOut' }}
+                  className={cn(
+                    "absolute top-24 bottom-24 z-40 flex flex-col space-y-6 pointer-events-auto",
+                    "right-4 lg:right-8 w-[min(20rem,calc(100vw-2rem))]"
+                  )}
+                >
               {activeModule === 'reservoirs' ? (
                 <ReservoirResultsPanel
-                  selectedLake={reservoirSummary?.readings.find(r => r.lake_name === selectedLakeName) || null}
+                  selectedLake={reservoirSummary?.readings.find(r => r.reservoirName === selectedLakeName) || null}
                   history={reservoirHistory}
                   overflowEvents={reservoirOverflows}
                   historyDays={reservoirHistoryDays}
@@ -1662,7 +1821,10 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                   isChecking={isCheckingConstruction} 
                   clickedPoint={clickedPoint}
                   isGeocoding={isGeocoding}
-                  onClearLocation={() => setClickedPoint(null)}
+                  onClearLocation={() => {
+                    setSelectedPoint(null);
+                    setClickedPoint(null);
+                  }}
                 />
               ) : activeModule === 'lighting' ? (
                 <LightingResultsPanel
@@ -1671,14 +1833,17 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                   error={lightingError}
                   clickedPoint={clickedPoint}
                   isGeocoding={isGeocoding}
-                  onClearLocation={() => setClickedPoint(null)}
+                  onClearLocation={() => {
+                    setSelectedPoint(null);
+                    setClickedPoint(null);
+                  }}
                 />
               ) : (
-              <div className="glass rounded-[2rem] p-8 flex flex-col max-h-[calc(100vh-12rem)] overflow-y-auto pr-3 border-white/5 shadow-2xl">
+              <div className="ui-panel flex flex-col max-h-[calc(100vh-12rem)] overflow-y-auto pr-3 border-white/5 shadow-2xl">
                 <div className="flex items-center justify-between mb-8">
                   <div className="flex items-center space-x-3">
                     <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]" />
-                    <h3 className="text-[10px] font-black text-white/40 uppercase tracking-[0.3em]">Real-time Analytics</h3>
+                    <h3 className="text-[10px] font-black text-white/40 uppercase tracking-[0.3em]">Location Inspector</h3>
                   </div>
                   <div className="flex items-center space-x-2 glass px-3 py-1 rounded-full border-white/5">
                     <Zap className="w-3 h-3 text-emerald-400" />
@@ -1692,7 +1857,10 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                       <div className="flex items-center justify-between mb-4">
                         <h4 className="text-sm font-black tracking-tighter text-emerald-400 uppercase italic">Location Selected</h4>
                         <button 
-                          onClick={() => setClickedPoint(null)}
+                          onClick={() => {
+                            setSelectedPoint(null);
+                            setClickedPoint(null);
+                          }}
                           className="p-1.5 hover:bg-white/5 rounded-lg transition-all"
                         >
                           <X className="w-4 h-4 text-white/40 hover:text-white" />
@@ -1709,7 +1877,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                       
                       <div className="space-y-4 max-h-[calc(100vh-22rem)] overflow-y-auto pr-2 custom-scrollbar">
                         {/* Traffic Congestion Card */}
-                        <div className="glass p-4 rounded-2xl border-white/5 space-y-2 bg-white/[0.02]">
+                        <div className={cn("ui-card ui-inspector-card space-y-2 bg-white/[0.02]", activeLayerId !== 'traffic' && "hidden")}>
                           <div className="flex items-center justify-between">
                             <div className="flex items-center space-x-2 text-[10px] font-black uppercase tracking-wider text-red-400">
                               <Activity className="w-3.5 h-3.5" />
@@ -1750,7 +1918,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                         </div>
 
                         {/* Air Quality (AQI) Card */}
-                        <div className="glass p-4 rounded-2xl border-white/5 space-y-2 bg-white/[0.02]">
+                        <div className={cn("ui-card ui-inspector-card space-y-2 bg-white/[0.02]", activeLayerId !== 'pollution' && "hidden")}>
                           <div className="flex items-center justify-between">
                             <div className="flex items-center space-x-2 text-[10px] font-black uppercase tracking-wider text-emerald-400">
                               <Wind className="w-3.5 h-3.5" />
@@ -1784,7 +1952,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                         </div>
 
                         {/* Population Density Card */}
-                        <div className="glass p-4 rounded-2xl border-white/5 space-y-1.5 bg-white/[0.02]">
+                        <div className={cn("ui-card ui-inspector-card space-y-1.5 bg-white/[0.02]", activeLayerId !== 'population' && "hidden")}>
                           <div className="flex items-center justify-between">
                             <div className="flex items-center space-x-2 text-[10px] font-black uppercase tracking-wider text-blue-400">
                               <Users className="w-3.5 h-3.5" />
@@ -1810,7 +1978,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                         </div>
 
                         {/* Crime Hotspots Card */}
-                        <div className="glass p-4 rounded-2xl border-white/5 space-y-1.5 bg-white/[0.02]">
+                        <div className={cn("ui-card ui-inspector-card space-y-1.5 bg-white/[0.02]", activeLayerId !== 'crime' && "hidden")}>
                           <div className="flex items-center justify-between">
                             <div className="flex items-center space-x-2 text-[10px] font-black uppercase tracking-wider text-amber-400">
                               <ShieldAlert className="w-3.5 h-3.5" />
@@ -1861,7 +2029,9 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                 </div>
               </div>
               )}
-            </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
 
             {/* Bottom Status Rail */}

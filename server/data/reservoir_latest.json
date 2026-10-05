@@ -1,0 +1,17 @@
+{
+  "source": "BMC Hydraulic Engineer's Department / Master Control Centre, Bhandup Complex",
+  "sourceUrl": "",
+  "lastUpdated": "2026-10-05T06:00:00+05:30",
+  "overallUsefulStoragePercent": 95.23,
+  "totalUsefulStorageML": 1378304,
+  "totalUsefulCapacityML": 1447363,
+  "readings": [
+    {"reservoirName": "Middle Vaitarna", "storageML": 192891, "capacityML": 193530, "percentage": 99.67, "waterLevel": null, "rainfall24h": null, "rainfallSeason": null, "change24h": null},
+    {"reservoirName": "Vihar", "storageML": 27698, "capacityML": 27698, "percentage": 100.0, "waterLevel": null, "rainfall24h": null, "rainfallSeason": null, "change24h": null},
+    {"reservoirName": "Bhatsa", "storageML": 700027, "capacityML": 717037, "percentage": 97.63, "waterLevel": null, "rainfall24h": null, "rainfallSeason": null, "change24h": null},
+    {"reservoirName": "Tulsi", "storageML": 7878, "capacityML": 8046, "percentage": 97.92, "waterLevel": null, "rainfall24h": null, "rainfallSeason": null, "change24h": null},
+    {"reservoirName": "Upper Vaitarna", "storageML": 219332, "capacityML": 227047, "percentage": 96.6, "waterLevel": null, "rainfall24h": null, "rainfallSeason": null, "change24h": null},
+    {"reservoirName": "Tansa", "storageML": 135596, "capacityML": 145080, "percentage": 93.46, "waterLevel": null, "rainfall24h": null, "rainfallSeason": null, "change24h": null},
+    {"reservoirName": "Modak Sagar", "storageML": 94882, "capacityML": 128925, "percentage": 73.59, "waterLevel": null, "rainfall24h": null, "rainfallSeason": null, "change24h": null}
+  ]
+}

@@ -1,7 +1,6 @@
 import re
 import httpx
 import logging
-from datetime import date
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger("urbaninsight.scraper")
@@ -102,11 +101,9 @@ async def scrape_lake_readings(source_url: str) -> dict:
         if len(readings) < 7:
             raise ValueError(f"Incomplete data: only parsed {len(readings)} of 7 lakes.")
             
-        # Use current date as default
-        report_date = date.today().isoformat()
-        
         # Try to find a date in the HTML text
         text_content = soup.get_text()
+        report_date = None
         date_match = re.search(r'\b(20\d{2}-\d{2}-\d{2})\b', text_content)
         if date_match:
             report_date = date_match.group(1)
@@ -115,6 +112,9 @@ async def scrape_lake_readings(source_url: str) -> dict:
             if slash_date_match:
                 d, m, y = slash_date_match.groups()
                 report_date = f"{y}-{int(m):02d}-{int(d):02d}"
+
+        if not report_date:
+            raise ValueError("BMC report did not include a recognizable report date")
 
         # If combined percent is still None, calculate weighted average from the 7 lakes
         if citywide_percent is None:

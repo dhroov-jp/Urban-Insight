@@ -362,6 +362,12 @@ def get_nearest_lake(lat: float, lng: float, max_distance: float = 0.012) -> Opt
     return None
 
 
+def get_lake_locations() -> dict[str, tuple[float, float]]:
+    with _cursor() as conn:
+        rows = conn.execute("SELECT lake_name, latitude, longitude FROM lakes").fetchall()
+    return {row[0]: (row[1], row[2]) for row in rows}
+
+
 def get_lighting_readings(grid_id: str, days: int = 90) -> list[dict[str, Any]]:
     with _cursor() as conn:
         conn.row_factory = sqlite3.Row

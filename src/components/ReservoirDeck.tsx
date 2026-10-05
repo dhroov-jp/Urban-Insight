@@ -2,7 +2,6 @@ import { useState, useMemo } from 'react';
 import { motion } from 'motion/react';
 import {
   Droplet,
-  CloudRain,
   Clock,
   RefreshCw,
   Loader2,
@@ -24,23 +23,25 @@ import {
 } from 'recharts';
 import { cn } from '../lib/utils';
 import type { ReservoirSummary, LakeReading, HistoricalReading, OverflowEvent } from '../lib/reservoirApi';
+import { IconButton, Panel, PanelHeader } from './ui';
+import { formatDate, formatDateTime } from '../lib/date';
 
 // Get stock health color class
 export function getStockColorClass(percent: number) {
-  if (percent >= 75) return 'text-emerald-400';
-  if (percent >= 40) return 'text-amber-400';
+  if (percent >= 90) return 'text-emerald-400';
+  if (percent >= 70) return 'text-amber-400';
   return 'text-rose-400';
 }
 
 export function getStockBgClass(percent: number) {
-  if (percent >= 75) return 'bg-emerald-500';
-  if (percent >= 40) return 'bg-amber-500';
+  if (percent >= 90) return 'bg-emerald-500';
+  if (percent >= 70) return 'bg-amber-500';
   return 'bg-rose-500';
 }
 
 export function getStockGlowClass(percent: number) {
-  if (percent >= 75) return 'shadow-[0_0_20px_rgba(16,185,129,0.4)]';
-  if (percent >= 40) return 'shadow-[0_0_20px_rgba(245,158,11,0.3)]';
+  if (percent >= 90) return 'shadow-[0_0_20px_rgba(16,185,129,0.4)]';
+  if (percent >= 70) return 'shadow-[0_0_20px_rgba(245,158,11,0.3)]';
   return 'shadow-[0_0_20px_rgba(244,63,94,0.4)]';
 }
 
@@ -67,40 +68,48 @@ export function ReservoirControlPanel({
 }: ReservoirControlPanelProps) {
   if (!summary) {
     return (
-      <div className="glass rounded-3xl p-6 flex flex-col items-center justify-center space-y-4 border-white/5 h-[400px]">
+      <Panel className="flex flex-col items-center justify-center space-y-4 border-white/5 h-[400px]">
         <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
         <p className="text-xs text-white/50">Loading reservoir data...</p>
-      </div>
+      </Panel>
+    );
+  }
+
+  if (summary.sourceStatus === 'unavailable' || summary.readings.length === 0) {
+    return (
+      <Panel className="flex flex-col items-center justify-center space-y-4 border-rose-500/20 bg-rose-500/5 min-h-[320px] text-center">
+        <AlertTriangle className="w-8 h-8 text-rose-400" />
+        <div>
+          <p className="text-xs font-black uppercase tracking-widest text-rose-400">Live Data Unavailable</p>
+          <p className="text-[10px] text-white/45 mt-2 max-w-[220px]">{summary.error || 'The BMC reservoir report could not be retrieved.'}</p>
+        </div>
+        <button onClick={onTriggerScrape} disabled={isScraping} className="ui-button-secondary">
+          <RefreshCw className={cn("w-3 h-3", isScraping && "animate-spin")} />
+          <span>Retry Refresh</span>
+        </button>
+      </Panel>
     );
   }
 
   const {
-    last_updated,
-    days_since_update,
-    demand_ml_day,
-    total_content_ml,
-    total_capacity_ml,
-    combined_percent_stock,
-    days_of_supply_remaining,
+    lastUpdated,
+    daysSinceUpdate,
+    dailyDemandML,
+    totalUsefulStorageML,
+    totalUsefulCapacityML,
+    overallUsefulStoragePercent,
+    daysOfSupply,
     readings,
   } = summary;
 
   // Freshness status
-  const isFresh = days_since_update <= 1;
+  const isFresh = summary.sourceStatus === 'live';
+  const sourceStatus = summary.sourceStatus === 'live' ? 'LIVE' : 'CACHED';
+  const updatedLabel = lastUpdated ? `${formatDateTime(lastUpdated).replace(' ', ' · ')} IST` : '—';
 
   return (
-    <div className="glass rounded-3xl p-6 flex flex-col space-y-5 border-white/5 overflow-y-auto max-h-[calc(100vh-12rem)] scrollbar-thin">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <Droplet className="w-4 h-4 text-emerald-400 animate-pulse" />
-          <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">
-            Water Reservoir Tracker
-          </h2>
-        </div>
-        <div className="px-2 py-0.5 glass rounded-full text-[9px] font-bold text-emerald-400 uppercase tracking-tight whitespace-nowrap">
-          Live Storage
-        </div>
-      </div>
+    <Panel className="flex flex-col space-y-5 border-white/5 overflow-y-auto max-h-[calc(100vh-12rem)] scrollbar-thin">
+      <PanelHeader icon={Droplet} title="Water Reservoir Tracker" status={sourceStatus} statusTone={isFresh ? 'emerald' : 'amber'} />
 
       {/* Freshness Status Banner (non-alarming style) */}
       <div className={cn(
@@ -111,41 +120,50 @@ export function ReservoirControlPanel({
         <div className="text-left leading-tight">
           <p className="text-[9px] font-black uppercase tracking-widest text-white/40">Data Freshness</p>
           <p className="text-[10px] font-medium text-white/80 mt-0.5">
-            {isFresh 
-              ? `Daily 6 AM report loaded` 
-              : `Last updated ${days_since_update} days ago (off-monsoon cadence)`}
+            {isFresh
+              ? `Live report · ${updatedLabel}`
+              : `Last updated ${updatedLabel} · ${daysSinceUpdate} days ago · cached`}
           </p>
         </div>
       </div>
 
+      {summary.sourceStatus === 'cached' && (
+        <div className="glass rounded-2xl p-3 border-amber-500/20 bg-amber-500/5 flex items-start space-x-3">
+          <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+          <p className="text-[10px] text-amber-200/75 leading-relaxed">
+            Live data unavailable. Showing the last successful BMC report from {updatedLabel}.
+          </p>
+        </div>
+      )}
+
       {/* Citywide Summary Metrics */}
       <div className="grid grid-cols-2 gap-4">
-        <div className="glass rounded-2xl p-4 border-white/5 relative overflow-hidden">
+        <div className="ui-card relative overflow-hidden">
           <div className="absolute top-2 right-2 opacity-10">
             <Droplet className="w-8 h-8 text-emerald-400" />
           </div>
           <p className="text-[8px] font-black text-white/40 uppercase tracking-widest mb-1">Citywide Stock</p>
           <div className="flex items-baseline space-x-1">
-            <p className={cn("text-3xl font-black tracking-tighter leading-none", getStockColorClass(combined_percent_stock))}>
-              {combined_percent_stock}%
+            <p className={cn("text-3xl font-black tracking-tighter leading-none", getStockColorClass(overallUsefulStoragePercent))}>
+              {overallUsefulStoragePercent.toFixed(2)}%
             </p>
           </div>
           <p className="text-[8px] text-white/30 mt-2">
-            {(total_content_ml / 1000).toFixed(1)}k / {(total_capacity_ml / 1000).toFixed(1)}k GL
+            {totalUsefulStorageML.toLocaleString()} / {totalUsefulCapacityML.toLocaleString()} ML
           </p>
         </div>
 
-        <div className="glass rounded-2xl p-4 border-white/5 relative overflow-hidden">
+        <div className="ui-card relative overflow-hidden">
           <div className="absolute top-2 right-2 opacity-10">
             <TrendingUp className="w-8 h-8 text-emerald-400" />
           </div>
           <p className="text-[8px] font-black text-white/40 uppercase tracking-widest mb-1">Days of Supply</p>
-          <p className="text-3xl font-black text-white tracking-tighter leading-none">
-            {Math.floor(days_of_supply_remaining)}
-            <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest ml-1">Days</span>
+          <p className="flex items-baseline gap-1 text-3xl font-black text-white tracking-tighter leading-none">
+            {Math.floor(daysOfSupply)}
+            <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Days</span>
           </p>
           <p className="text-[8px] text-white/30 mt-2">
-            Demand: {demand_ml_day.toLocaleString()} ML/day
+            Demand: {dailyDemandML.toLocaleString()} ML/day
           </p>
         </div>
       </div>
@@ -158,11 +176,11 @@ export function ReservoirControlPanel({
         
         <div className="space-y-2">
           {readings.map((lake) => {
-            const isSelected = selectedLakeName === lake.lake_name;
+            const isSelected = selectedLakeName === lake.reservoirName;
             return (
               <button
-                key={lake.lake_name}
-                onClick={() => onSelectLake(isSelected ? null : lake.lake_name)}
+                key={lake.reservoirName}
+                onClick={() => onSelectLake(isSelected ? null : lake.reservoirName)}
                 className={cn(
                   "w-full flex flex-col p-3 rounded-2xl transition-all duration-300 border text-left group",
                   isSelected
@@ -172,34 +190,36 @@ export function ReservoirControlPanel({
               >
                 <div className="flex items-center justify-between w-full mb-2">
                   <div className="flex items-center space-x-2">
-                    <div className={cn("w-1.5 h-1.5 rounded-full", getStockBgClass(lake.percent_stock), getStockGlowClass(lake.percent_stock))} />
+                    <div className={cn("w-1.5 h-1.5 rounded-full", getStockBgClass(lake.percentage), getStockGlowClass(lake.percentage))} />
                     <span className={cn(
                       "text-xs font-black uppercase tracking-wider",
                       isSelected ? "text-white" : "text-white/60 group-hover:text-white"
                     )}>
-                      {lake.lake_name}
+                      {lake.reservoirName}
                     </span>
                   </div>
-                  <span className={cn("text-xs font-black", getStockColorClass(lake.percent_stock))}>
-                    {lake.percent_stock}%
+                  <span className={cn("text-xs font-black", getStockColorClass(lake.percentage))}>
+                    {lake.percentage.toFixed(2)}%
                   </span>
                 </div>
 
                 {/* Progress bar */}
                 <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden mb-1">
                   <div
-                    className={cn("h-full rounded-full transition-all duration-500", getStockBgClass(lake.percent_stock))}
-                    style={{ width: `${lake.percent_stock}%` }}
+                    className={cn("h-full rounded-full transition-all duration-500", getStockBgClass(lake.percentage))}
+                    style={{ width: `${lake.percentage}%` }}
                   />
                 </div>
 
                 <div className="flex items-center justify-between text-[8px] text-white/30 font-bold uppercase tracking-wider w-full mt-1">
-                  <span>{lake.content_ml.toLocaleString()} ML stock</span>
-                  {lake.rainfall_mm_24hr > 0 && (
+                  <span>{lake.storageML.toLocaleString()} / {lake.capacityML.toLocaleString()} ML</span>
+                  {lake.change24h !== null ? (
                     <span className="flex items-center text-sky-400">
-                      <CloudRain className="w-2 h-2 mr-0.5" />
-                      +{lake.rainfall_mm_24hr}mm rain
+                      <TrendingUp className="w-2 h-2 mr-0.5" />
+                      {lake.change24h > 0 ? '↑ Rising' : lake.change24h < 0 ? '↓ Falling' : '→ Stable'}
                     </span>
+                  ) : (
+                    <span className="text-white/25">— No 24h change</span>
                   )}
                 </div>
               </button>
@@ -233,10 +253,10 @@ export function ReservoirControlPanel({
           onClick={onTriggerScrape}
           disabled={isScraping}
           className={cn(
-            "w-full flex items-center justify-center space-x-2 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all duration-300 border border-white/5",
+            "ui-button-secondary w-full",
             isScraping 
               ? "bg-white/5 text-white/20 cursor-not-allowed" 
-              : "glass glass-hover text-white hover:bg-emerald-500 hover:text-black hover:border-transparent hover:shadow-[0_0_20px_rgba(16,185,129,0.3)]"
+              : ""
           )}
         >
           {isScraping ? (
@@ -247,12 +267,12 @@ export function ReservoirControlPanel({
           ) : (
             <>
               <RefreshCw className="w-3 h-3" />
-              <span>Force Scraping Trigger</span>
+              <span>Refresh BMC Report</span>
             </>
           )}
         </button>
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -296,30 +316,23 @@ export function ReservoirResultsPanel({
   }, [overflowEvents]);
 
   return (
-    <div className="glass rounded-[2rem] p-6 flex flex-col h-full border-white/5 shadow-2xl relative overflow-y-auto max-h-[calc(100vh-12rem)] scrollbar-thin">
+    <Panel className="flex flex-col h-full border-white/5 shadow-2xl relative overflow-y-auto max-h-[calc(100vh-12rem)] scrollbar-thin">
       
       {/* 1. Lake Detail Panel State */}
       {selectedLake ? (
         <div className="flex flex-col h-full space-y-6">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center space-x-3">
-              <div className={cn("w-2 h-2 rounded-full", getStockBgClass(selectedLake.percent_stock), getStockGlowClass(selectedLake.percent_stock))} />
-              <h3 className="text-[10px] font-black text-white/40 uppercase tracking-[0.3em]">
-                Reservoir Diagnostics
-              </h3>
-            </div>
-            <button 
-              onClick={onClose}
-              className="p-1.5 hover:bg-white/5 rounded-lg transition-all border border-transparent hover:border-white/5"
-            >
-              <X className="w-4 h-4 text-white/40 hover:text-white" />
-            </button>
-          </div>
+          <PanelHeader
+            icon={Droplet}
+            title="Reservoir Diagnostics"
+            status={`${selectedLake.percentage.toFixed(2)}% stocked`}
+            statusTone={selectedLake.percentage >= 90 ? 'emerald' : selectedLake.percentage >= 70 ? 'amber' : 'rose'}
+            actions={<IconButton onClick={onClose} label="Close reservoir inspector"><X className="w-4 h-4" /></IconButton>}
+          />
 
           <div>
             <h4 className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-1 italic">Selected Lake</h4>
             <h2 className="text-2xl font-black tracking-tighter text-white uppercase italic leading-none">
-              {selectedLake.lake_name}
+              {selectedLake.reservoirName}
             </h2>
           </div>
 
@@ -328,21 +341,21 @@ export function ReservoirResultsPanel({
             <div className="glass rounded-xl p-3 border-white/5">
               <span className="text-[8px] font-black text-white/40 uppercase tracking-widest block mb-1">Live Stock</span>
               <p className="text-base font-black text-white leading-none">
-                {Math.round(selectedLake.content_ml).toLocaleString()}
+                {Math.round(selectedLake.storageML).toLocaleString()}
                 <span className="text-[8px] font-bold text-white/40 uppercase tracking-widest ml-0.5">ML</span>
               </p>
-              <span className="text-[8px] text-white/30 block mt-1">Cap: {Math.round(selectedLake.full_capacity_ml).toLocaleString()}</span>
+              <span className="text-[8px] text-white/30 block mt-1">Cap: {Math.round(selectedLake.capacityML).toLocaleString()}</span>
             </div>
             <div className="glass rounded-xl p-3 border-white/5">
               <span className="text-[8px] font-black text-white/40 uppercase tracking-widest block mb-1">Fill Level</span>
-              <p className={cn("text-base font-black leading-none", getStockColorClass(selectedLake.percent_stock))}>
-                {selectedLake.percent_stock}%
+              <p className={cn("text-base font-black leading-none", getStockColorClass(selectedLake.percentage))}>
+                {selectedLake.percentage.toFixed(2)}%
               </p>
             </div>
             <div className="glass rounded-xl p-3 border-white/5">
               <span className="text-[8px] font-black text-white/40 uppercase tracking-widest block mb-1">24h Rain</span>
               <p className="text-base font-black text-sky-400 leading-none">
-                {selectedLake.rainfall_mm_24hr}
+                {selectedLake.rainfall24h ?? '—'}
                 <span className="text-[8px] font-bold text-white/40 uppercase tracking-widest ml-0.5">mm</span>
               </p>
             </div>
@@ -404,14 +417,7 @@ export function ReservoirResultsPanel({
                       tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 7, fontWeight: 900 }} 
                       axisLine={false}
                       tickLine={false}
-                      tickFormatter={(v) => {
-                        try {
-                          const dateObj = new Date(v);
-                          return dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-                        } catch (e) {
-                          return v;
-                        }
-                      }}
+                      tickFormatter={(v) => formatDate(String(v))}
                     />
                     <YAxis 
                       tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 7, fontWeight: 900 }}
@@ -429,7 +435,7 @@ export function ReservoirResultsPanel({
                         color: '#fff',
                         fontFamily: 'Inter, sans-serif'
                       }}
-                      labelFormatter={(label) => `Date: ${label}`}
+                      labelFormatter={(label) => `Date: ${formatDate(String(label))}`}
                       formatter={(value: any, name: string) => {
                         if (name === "percent_stock") return [`${value}%`, "Stock Level"];
                         if (name === "rainfall_mm_24hr") return [`${value} mm`, "Daily Rain"];
@@ -501,16 +507,7 @@ export function ReservoirResultsPanel({
                       const dateVal = row[year.toString()];
                       const isOverflown = dateVal !== 'N/A';
                       
-                      // Format date format e.g. "2026-07-18" -> "Jul 18"
-                      let formattedDate = dateVal;
-                      if (isOverflown) {
-                        try {
-                          const dateObj = new Date(dateVal);
-                          formattedDate = dateObj.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-                        } catch (e) {
-                          formattedDate = dateVal;
-                        }
-                      }
+                      const formattedDate = isOverflown ? formatDate(dateVal) : dateVal;
                       
                       return (
                         <td key={year} className="p-3 text-center">
@@ -537,6 +534,6 @@ export function ReservoirResultsPanel({
           </div>
         </div>
       )}
-    </div>
+    </Panel>
   );
 }

@@ -14,6 +14,8 @@ import {
 import { cn } from '../lib/utils';
 import type { ConstructionCheckResponse } from '../lib/constructionApi';
 import { resolveThumbnailUrl } from '../lib/constructionApi';
+import { IconButton, Panel, PanelHeader } from './ui';
+import { formatDate } from '../lib/date';
 
 // ---------- Left deck: AOI drawing controls + run settings ----------
 
@@ -45,18 +47,8 @@ export function ConstructionControlPanel({
   error,
 }: ConstructionControlPanelProps) {
   return (
-    <div className="glass rounded-3xl p-6 flex flex-col space-y-6 border-white/5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <HardHat className="w-4 h-4 text-emerald-400" />
-          <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">
-            Construction Monitor
-          </h2>
-        </div>
-        <div className="px-2 py-0.5 glass rounded-full text-[9px] font-bold text-emerald-400 uppercase tracking-tight whitespace-nowrap">
-          Sentinel-2
-        </div>
-      </div>
+    <Panel className="flex flex-col space-y-6 border-white/5">
+      <PanelHeader icon={HardHat} title="Construction Monitor" status="Sentinel-2" statusTone="emerald" />
 
       <div className="glass glass-hover rounded-2xl p-4 border-dashed border-emerald-500/30 flex items-start space-x-3">
         <MousePointerSquareDashed className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
@@ -151,10 +143,10 @@ export function ConstructionControlPanel({
           onClick={onCheck}
           disabled={!hasAOI || isChecking}
           className={cn(
-            'flex-1 flex items-center justify-center space-x-2 py-3.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all',
+            'ui-button-primary flex-1',
             !hasAOI || isChecking
               ? 'bg-white/5 text-white/20 cursor-not-allowed'
-              : 'bg-emerald-500 text-black hover:shadow-[0_0_25px_rgba(16,185,129,0.5)]'
+              : ''
           )}
         >
           {isChecking ? (
@@ -170,13 +162,12 @@ export function ConstructionControlPanel({
           )}
         </button>
         {hasAOI && !isChecking && (
-          <button
+          <IconButton
             onClick={onClearAOI}
-            title="Clear AOI"
-            className="glass glass-hover p-3.5 rounded-2xl border-white/5"
+            label="Clear AOI"
           >
             <RotateCcw className="w-4 h-4 text-white/50" />
-          </button>
+          </IconButton>
         )}
       </div>
 
@@ -185,7 +176,7 @@ export function ConstructionControlPanel({
           Fetching Sentinel-2 scenes and computing NDBI change — this can take up to a minute.
         </p>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -213,20 +204,12 @@ export function ConstructionResultsPanel({
   onClearLocation
 }: ConstructionResultsPanelProps) {
   return (
-    <div className="glass rounded-[2rem] p-8 flex flex-col border-white/5 shadow-2xl max-h-[calc(100vh-12rem)] overflow-y-auto pr-3">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center space-x-3">
-          <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]" />
-          <h3 className="text-[10px] font-black text-white/40 uppercase tracking-[0.3em]">
-            Construction Activity
-          </h3>
-        </div>
-        {result?.cached && (
-          <div className="glass px-3 py-1 rounded-full border-white/5">
-            <span className="text-[8px] font-black text-white/40 uppercase tracking-widest">Cached</span>
-          </div>
-        )}
-      </div>
+    <Panel className="flex flex-col border-white/5 shadow-2xl max-h-[calc(100vh-12rem)] overflow-y-auto pr-3">
+      <PanelHeader
+        icon={HardHat}
+        title="Construction Activity"
+        status={result?.cached ? 'Cached' : undefined}
+      />
 
       {clickedPoint && (
         <div className="glass rounded-2xl p-4 border-white/5 mb-6 relative overflow-hidden bg-white/[0.02]">
@@ -236,12 +219,12 @@ export function ConstructionResultsPanel({
               <span>Target Location</span>
             </div>
             {onClearLocation && (
-              <button
+              <IconButton
                 onClick={onClearLocation}
-                className="p-1 hover:bg-white/5 rounded-lg transition-all"
+                label="Close location inspector"
               >
                 <X className="w-3.5 h-3.5 text-white/40 hover:text-white" />
-              </button>
+              </IconButton>
             )}
           </div>
           {isGeocoding ? (
@@ -319,12 +302,12 @@ export function ConstructionResultsPanel({
           <div className="pt-4 border-t border-white/10 grid grid-cols-2 gap-3">
             <div className="glass p-3 rounded-xl border-white/5">
               <p className="text-[8px] font-black text-white/30 uppercase tracking-widest mb-1">Before</p>
-              <p className="text-xs font-mono text-white/70">{result.before_scene?.date}</p>
+              <p className="text-xs font-mono text-white/70">{formatDate(result.before_scene?.date)}</p>
               <p className="text-[8px] text-white/30 mt-0.5">{result.before_scene?.cloud_cover.toFixed(1)}% cloud</p>
             </div>
             <div className="glass p-3 rounded-xl border-white/5">
               <p className="text-[8px] font-black text-white/30 uppercase tracking-widest mb-1">After</p>
-              <p className="text-xs font-mono text-emerald-400">{result.after_scene?.date}</p>
+              <p className="text-xs font-mono text-emerald-400">{formatDate(result.after_scene?.date)}</p>
               <p className="text-[8px] text-white/30 mt-0.5">{result.after_scene?.cloud_cover.toFixed(1)}% cloud</p>
             </div>
           </div>
@@ -389,6 +372,6 @@ export function ConstructionResultsPanel({
           </p>
         </div>
       )}
-    </div>
+    </Panel>
   );
 }

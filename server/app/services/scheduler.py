@@ -1,9 +1,6 @@
 import logging
-from datetime import date
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from ..config import settings
-from .. import db
-from .scraper import scrape_lake_readings
+from .reservoir_service import refresh_reservoir_snapshot
 from .blackmarble import fetch_and_process_latest_lighting
 
 logger = logging.getLogger("urbaninsight.scheduler")
@@ -12,23 +9,11 @@ scheduler = AsyncIOScheduler()
 
 async def scheduled_scrape_job():
     logger.info("Running daily scheduled reservoir scrape job...")
-    url = settings.RESERVOIR_SCRAPER_URL
-    if not url:
-        logger.warning("No reservoir scraper URL configured. Skipping scheduled scrape.")
-        return
-        
     try:
-        data = await scrape_lake_readings(url)
-        readings = data.get("readings", [])
-        report_date = data.get("date", date.today().isoformat())
-        
-        if readings and len(readings) == 7:
-            db.save_scraped_readings(readings, report_date, url)
-            logger.info(f"Successfully scraped and saved readings for date: {report_date}")
-        else:
-            logger.warning("Scraper returned incomplete readings. Skipping database insertion to prevent null/incomplete data.")
+        snapshot = await refresh_reservoir_snapshot()
+        logger.info("Reservoir refresh completed with source status: %s", snapshot.get("sourceStatus"))
     except Exception as e:
-        logger.error(f"Scheduled reservoir scrape job failed: {e}. Skipping database insertion to prevent overwrite.")
+        logger.error("Scheduled reservoir scrape job failed: %s", e)
 
 async def scheduled_lighting_job():
     try:

@@ -73,7 +73,7 @@ To test or manually refresh the database:
 ### 3. Environment Configurations
 
 Configure these options in `server/.env`:
-- `RESERVOIR_SCRAPER_URL`: Source URL to fetch and scrape the daily HTML table. By default, it points to a built-in mock endpoint (`http://localhost:8000/api/reservoirs/mock-source`) to allow out-of-the-box local testing.
+- `RESERVOIR_SCRAPER_URL`: Official BMC Hydraulic Engineer's Department / Master Control Centre daily report URL. If it is unavailable or unset, the API serves the last successful normalized snapshot with `sourceStatus: "cached"`; it never fabricates a current report.
 - `RESERVOIR_DEMAND_ML_DAY`: Daily citywide consumption demand constant in Million Litres (default: `4200.0` ML/day). Used to calculate the Days of Supply Remaining.
 
 

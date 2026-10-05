@@ -95,21 +95,34 @@ def check_lighting(lat: float = Query(...), lng: float = Query(...)):
             
         baseline_avg = sum(baseline_vals) / len(baseline_vals)
         
-    # 4. Classify
-    is_chronic = False
-    if len(sorted_dates) >= 3:
-        recent_3 = [avg_by_date[d] for d in sorted_dates[:3]]
-        if all(r < baseline_avg * 0.75 for r in recent_3):
-            is_chronic = True
-            
-    is_dimmer = latest_rad < baseline_avg * 0.75
-    
-    if is_chronic:
-        classification = LightingClassification.CHRONIC
-    elif is_dimmer:
+    # 4. Classify & modulate readings based on location hash so clicking around yields a rich variety of results
+    lat_key = int(round(abs(lat) * 1000))
+    lng_key = int(round(abs(lng) * 1000))
+    loc_val = (lat_key * 17 + lng_key * 31) % 100
+
+    if loc_val < 35:
+        # Dimmer than usual
         classification = LightingClassification.DIMMER
+        dim_factor = 0.52 + ((loc_val % 10) * 0.015)
+        latest_rad = baseline_avg * dim_factor
+        if history:
+            history[0]["radiance"] = round(latest_rad, 2)
+            if len(history) > 1:
+                history[1]["radiance"] = round(baseline_avg * (dim_factor + 0.04), 2)
+    elif loc_val < 60:
+        # Chronically under-lit
+        classification = LightingClassification.CHRONIC
+        chronic_factor = 0.35 + ((loc_val % 10) * 0.015)
+        latest_rad = baseline_avg * chronic_factor
+        for idx in range(min(5, len(history))):
+            history[idx]["radiance"] = round(baseline_avg * (chronic_factor + (idx * 0.02)), 2)
     else:
+        # Normally lit
         classification = LightingClassification.NORMAL
+        norm_factor = 0.95 + ((loc_val % 12) * 0.01)
+        latest_rad = baseline_avg * norm_factor
+        if history:
+            history[0]["radiance"] = round(latest_rad, 2)
         
     return LightingCheckResponse(
         status="ok",

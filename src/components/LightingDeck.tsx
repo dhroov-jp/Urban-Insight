@@ -1,23 +1,15 @@
-import { Moon, Info, Zap, Globe, X, Activity } from 'lucide-react';
+import { Moon, Info, Globe, X, Activity } from 'lucide-react';
 import { cn } from '../lib/utils';
 import type { LightingCheckResponse } from '../lib/lightingApi';
+import { IconButton, Panel, PanelHeader } from './ui';
+import { formatDate } from '../lib/date';
 
 interface LightingControlPanelProps {}
 
 export function LightingControlPanel({}: LightingControlPanelProps) {
   return (
-    <div className="glass rounded-3xl p-6 flex flex-col space-y-6 border-white/5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <Moon className="w-4 h-4 text-indigo-400" />
-          <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">
-            Nighttime Lighting
-          </h2>
-        </div>
-        <div className="px-2 py-0.5 glass rounded-full text-[9px] font-bold text-indigo-400 uppercase tracking-tight whitespace-nowrap">
-          VIIRS
-        </div>
-      </div>
+    <Panel className="flex flex-col space-y-6 border-white/5">
+      <PanelHeader icon={Moon} title="Nighttime Lighting" status="VIIRS" statusTone="indigo" />
 
       <div className="glass glass-hover rounded-2xl p-4 border-dashed border-indigo-500/30 flex items-start space-x-3">
         <Info className="w-4 h-4 text-indigo-400 mt-0.5 flex-shrink-0" />
@@ -62,7 +54,7 @@ export function LightingControlPanel({}: LightingControlPanelProps) {
           </div>
         </div>
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -88,27 +80,18 @@ export function LightingResultsPanel({
   if (!clickedPoint) return null;
 
   return (
-    <div className="glass rounded-[2rem] p-8 flex flex-col max-h-[calc(100vh-12rem)] overflow-y-auto pr-3 border-white/5 shadow-2xl">
-      <div className="flex items-center justify-between mb-8">
-        <div className="flex items-center space-x-3">
-          <div className="w-2 h-2 rounded-full bg-indigo-500 shadow-[0_0_10px_rgba(99,102,241,0.8)]" />
-          <h3 className="text-[10px] font-black text-white/40 uppercase tracking-[0.3em]">Location Selected</h3>
-        </div>
-        <div className="flex items-center space-x-2 glass px-3 py-1 rounded-full border-white/5">
-          <Zap className="w-3 h-3 text-indigo-400" />
-          <span className="text-[8px] font-black text-indigo-400 uppercase tracking-widest">Live</span>
-        </div>
-      </div>
+    <Panel className="flex flex-col max-h-[calc(100vh-12rem)] overflow-y-auto pr-3 border-white/5 shadow-2xl">
+      <PanelHeader icon={Moon} title="Location Selected" status="Live" statusTone="indigo" />
 
       <div className="mb-4">
         <div className="flex items-center justify-between mb-4">
           <h4 className="text-sm font-black tracking-tighter text-indigo-400 uppercase italic">Location Details</h4>
-          <button 
+          <IconButton
             onClick={onClearLocation}
-            className="p-1.5 hover:bg-white/5 rounded-lg transition-all"
+            label="Close location inspector"
           >
             <X className="w-4 h-4 text-white/40 hover:text-white" />
-          </button>
+          </IconButton>
         </div>
         
         {isGeocoding ? (
@@ -135,7 +118,7 @@ export function LightingResultsPanel({
               <p className="text-xs text-rose-400 font-bold">{error}</p>
             </div>
           ) : result ? (
-            <div className="glass p-4 rounded-2xl border-white/5 space-y-4 bg-white/[0.02]">
+            <div className="ui-card space-y-4 bg-white/[0.02]">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-wider text-white/40">Status</span>
                 <div className={cn(
@@ -156,12 +139,12 @@ export function LightingResultsPanel({
               ) : (
                 <>
                   <div className="grid grid-cols-2 gap-2 mt-2">
-                    <div className="glass p-3 rounded-xl bg-black/20 border border-white/5">
+                    <div className="ui-card bg-black/20">
                       <p className="text-[8px] text-white/40 uppercase font-bold mb-1">Latest Reading</p>
                       <p className="text-sm font-black text-white">{result.radiance_value}</p>
-                      <p className="text-[8px] text-indigo-400 mt-1">{result.date_used}</p>
+                      <p className="text-[8px] text-indigo-400 mt-1">{formatDate(result.date_used)}</p>
                     </div>
-                    <div className="glass p-3 rounded-xl bg-black/20 border border-white/5">
+                    <div className="ui-card bg-black/20">
                       <p className="text-[8px] text-white/40 uppercase font-bold mb-1">90-Day Baseline</p>
                       <p className="text-sm font-black text-white">{result.baseline_average}</p>
                       <p className="text-[8px] text-white/30 mt-1">Average</p>
@@ -187,14 +170,14 @@ export function LightingResultsPanel({
               )}
             </div>
           ) : (
-            <div className="glass p-6 rounded-2xl border-white/5 flex flex-col items-center text-center opacity-50">
+            <div className="ui-card flex flex-col items-center text-center opacity-50">
               <Globe className="w-8 h-8 text-white/20 mb-2" />
               <p className="text-[10px] text-white/40">Select a location to view lighting metrics</p>
             </div>
           )}
         </div>
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -244,8 +227,8 @@ function Sparkline({ history }: { history: NonNullable<LightingCheckResponse['hi
         })}
       </svg>
       <div className="flex justify-between mt-1 px-1">
-        <span className="text-[7px] text-white/30">{data[0]?.date}</span>
-        <span className="text-[7px] text-white/30">{data[data.length - 1]?.date}</span>
+        <span className="text-[7px] text-white/30">{formatDate(data[0]?.date)}</span>
+        <span className="text-[7px] text-white/30">{formatDate(data[data.length - 1]?.date)}</span>
       </div>
     </div>
   );
