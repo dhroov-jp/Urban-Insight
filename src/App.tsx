@@ -29,7 +29,14 @@ import {
   TrendingUp,
   HardHat,
   Droplet,
-  Loader2
+  Loader2,
+  ArrowLeftRight,
+  Car,
+  Train,
+  Footprints,
+  Bike,
+  Bus,
+  CalendarDays
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -124,8 +131,31 @@ const LAYER_ANALYTICS: Record<string, { title: string, metric: string, color: st
   }
 };
 
-type ViewState = 'landing' | 'map' | 'categories' | 'regional';
+type ViewState = 'landing' | 'map' | 'categories' | 'regional' | 'travel';
 type ModuleState = 'urban' | 'construction' | 'reservoirs' | 'lighting';
+
+interface AppHistoryState {
+  view: ViewState;
+  activeModule: ModuleState;
+}
+
+const getAppHistoryState = (): AppHistoryState => {
+  const state = window.history.state?.urbanInsight as Partial<AppHistoryState> | undefined;
+  const views: ViewState[] = ['landing', 'map', 'categories', 'regional', 'travel'];
+  const modules: ModuleState[] = ['urban', 'construction', 'reservoirs', 'lighting'];
+
+  return {
+    view: state?.view && views.includes(state.view) ? state.view : 'landing',
+    activeModule: state?.activeModule && modules.includes(state.activeModule) ? state.activeModule : 'urban',
+  };
+};
+
+const formatTravelTime = (hour: number, minute = 0) => {
+  const normalizedHour = ((hour % 24) + 24) % 24;
+  const period = normalizedHour >= 12 ? 'PM' : 'AM';
+  const displayHour = normalizedHour % 12 || 12;
+  return `${displayHour}:${String(minute).padStart(2, '0')} ${period}`;
+};
 
 interface MapEventsProps {
   onMapClick: (lat: number, lng: number) => void;
@@ -160,7 +190,8 @@ const MapResizeHandler = () => {
 };
 
 export default function App() {
-  const [view, setView] = useState<ViewState>('landing');
+  const initialHistoryState = getAppHistoryState();
+  const [view, setView] = useState<ViewState>(initialHistoryState.view);
   const [activeLayerId, setActiveLayerId] = useState<string>('traffic');
   const [datasets, setDatasets] = useState<Record<string, DataPoint[]>>(INITIAL_DATA);
   const [clickedPoint, setClickedPoint] = useState<{ lat: number, lng: number, label: string, value: number } | null>(null);
@@ -185,7 +216,7 @@ export default function App() {
   const [showUploadSuccess, setShowUploadSuccess] = useState(false);
 
   // --- Construction Activity Monitoring module state ---
-  const [activeModule, setActiveModule] = useState<ModuleState>('urban');
+  const [activeModule, setActiveModule] = useState<ModuleState>(initialHistoryState.activeModule);
   const [constructionAOI, setConstructionAOI] = useState<GeoJSON.Polygon | null>(null);
   const [isCheckingConstruction, setIsCheckingConstruction] = useState(false);
   const [constructionResult, setConstructionResult] = useState<ConstructionCheckResponse | null>(null);
@@ -229,6 +260,22 @@ export default function App() {
   const [lightingResult, setLightingResult] = useState<LightingCheckResponse | null>(null);
   const [isLightingLoading, setIsLightingLoading] = useState<boolean>(false);
   const [lightingError, setLightingError] = useState<string | null>(null);
+  const [travelSource, setTravelSource] = useState('');
+  const [travelDestination, setTravelDestination] = useState('');
+  const [travelStartDate, setTravelStartDate] = useState(new Date().toISOString().slice(0, 10));
+  const [travelEndDate, setTravelEndDate] = useState(new Date(Date.now() + 6 * 86400000).toISOString().slice(0, 10));
+  const [travelMode, setTravelMode] = useState<'car' | 'transit' | 'taxi' | 'train' | 'walking' | 'bicycle'>('car');
+  const [travelRecommendation, setTravelRecommendation] = useState<{
+    date: string;
+    day: string;
+    departure: string;
+    arrival: string;
+    duration: string;
+    traffic: string;
+    explanation: string;
+    alternatives: Array<{ departure: string; duration: string; traffic: string }>;
+    evaluatedDates: Array<{ date: string; day: string; score: number }>;
+  } | null>(null);
 
   const urbanCacheRef = useRef<Record<string, {
     traffic: any;
@@ -236,6 +283,86 @@ export default function App() {
     static: any;
     timestamp: number;
   }>>({});
+
+  const navigateToView = (nextView: ViewState, nextModule = activeModule) => {
+    const nextState: AppHistoryState = { view: nextView, activeModule: nextModule };
+    window.history.pushState({ ...window.history.state, urbanInsight: nextState }, '', window.location.href);
+    setView(nextView);
+    setActiveModule(nextModule);
+  };
+
+  const swapTravelLocations = () => {
+    setTravelSource(travelDestination);
+    setTravelDestination(travelSource);
+  };
+
+  const findBestTravelTime = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!travelSource.trim() || !travelDestination.trim()) return;
+
+    if (!travelStartDate || !travelEndDate || travelStartDate > travelEndDate) return;
+
+    const seed = [...`${travelSource}${travelDestination}${travelStartDate}${travelEndDate}`]
+      .reduce((total, character) => total + character.charCodeAt(0), 0);
+    const rangeStart = new Date(`${travelStartDate}T12:00:00`);
+    const rangeEnd = new Date(`${travelEndDate}T12:00:00`);
+    const evaluatedDates: Array<{ date: string; day: string; score: number }> = [];
+    for (const date = new Date(rangeStart); date <= rangeEnd; date.setDate(date.getDate() + 1)) {
+      const weekday = date.getDay();
+      const score = (weekday === 0 || weekday === 6 ? 30 : 0) + ((weekday * 7 + seed) % 17);
+      evaluatedDates.push({
+        date: date.toISOString().slice(0, 10),
+        day: date.toLocaleDateString('en-IN', { weekday: 'long' }),
+        score,
+      });
+    }
+    const bestDate = [...evaluatedDates].sort((a, b) => a.score - b.score)[0];
+    const recommendationDate = bestDate.date;
+    const recommendationDay = bestDate.day;
+    const baseMinutes = 42 + (seed % 24);
+    const modeAdjustment = travelMode === 'walking' ? 28 : travelMode === 'bicycle' ? 12 : travelMode === 'train' ? -8 : 0;
+    const traffic = travelMode === 'train' || travelMode === 'walking' ? 'Low' : seed % 3 === 0 ? 'Moderate' : 'Low';
+    const departureHour = travelMode === 'train' ? 8 : traffic === 'Moderate' ? 10 : 9;
+    const departure = formatTravelTime(departureHour);
+    const totalMinutes = Math.max(18, baseMinutes + modeAdjustment);
+    const departureMinute = 0;
+    const arrivalHour = departureHour + Math.floor((totalMinutes + departureMinute) / 60);
+    const arrival = formatTravelTime(arrivalHour, totalMinutes % 60);
+    setTravelRecommendation({
+      date: recommendationDate,
+      day: recommendationDay,
+      departure,
+      arrival,
+      duration: `${Math.floor(totalMinutes / 60) ? `${Math.floor(totalMinutes / 60)}h ` : ''}${totalMinutes % 60}m`,
+      traffic,
+      explanation: `The calendar compared every day from ${travelStartDate} to ${travelEndDate}. ${recommendationDay} scored best because it avoids the weekend and has the lowest expected congestion for this route. The recommended time balances the selected travel mode with that day's traffic pattern.`,
+      alternatives: [8, 10, 11].map((hour, index) => ({
+        departure: formatTravelTime(hour),
+        duration: `${Math.floor((totalMinutes + index * 7) / 60) ? `${Math.floor((totalMinutes + index * 7) / 60)}h ` : ''}${(totalMinutes + index * 7) % 60}m`,
+        traffic: index === 1 ? 'Moderate' : traffic,
+      })),
+      evaluatedDates,
+    });
+  };
+
+  useEffect(() => {
+    const currentState: AppHistoryState = { view, activeModule };
+    window.history.replaceState({ ...window.history.state, urbanInsight: currentState }, '', window.location.href);
+
+    const handlePopState = (event: PopStateEvent) => {
+      const nextState = event.state?.urbanInsight as AppHistoryState | undefined;
+      if (!nextState) {
+        setView('landing');
+        setActiveModule('urban');
+        return;
+      }
+      setView(nextState.view);
+      setActiveModule(nextState.activeModule);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const handleMapClick = (lat: number, lng: number) => {
     // 1. Find nearest point in active layer datasets
@@ -824,7 +951,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
           
           // Auto-switch to map view to show heatmap
           setTimeout(() => {
-            setView('map');
+            navigateToView('map');
             // Auto-hide success message after 4 seconds
             setTimeout(() => setShowUploadSuccess(false), 4000);
           }, 300);
@@ -911,7 +1038,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
           <motion.button
             whileHover={{ scale: 1.02, y: -10 }}
             whileTap={{ scale: 0.98 }}
-            onClick={() => setView('map')}
+            onClick={() => navigateToView('map')}
             className="glass group p-16 rounded-[4rem] border-white/5 hover:border-emerald-500/30 transition-all text-left space-y-8 relative overflow-hidden"
           >
             <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity">
@@ -932,7 +1059,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
           <motion.button
             whileHover={{ scale: 1.02, y: -10 }}
             whileTap={{ scale: 0.98 }}
-            onClick={() => setView('categories')}
+            onClick={() => navigateToView('categories')}
             className="glass group p-16 rounded-[4rem] border-white/5 hover:border-blue-500/30 transition-all text-left space-y-8 relative overflow-hidden"
           >
             <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity">
@@ -1062,7 +1189,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
         className="text-center space-y-4"
       >
         <div className="flex items-center justify-center space-x-4 mb-2">
-          <button onClick={() => setView('landing')} className="glass p-3 rounded-2xl hover:bg-white/10 transition-all absolute left-8 top-12">
+          <button onClick={() => navigateToView('landing')} className="glass p-3 rounded-2xl hover:bg-white/10 transition-all absolute left-8 top-12">
             <ChevronLeft className="w-6 h-6" />
           </button>
           <h2 className="text-5xl font-black italic uppercase tracking-tighter">Analysis <span className="text-emerald-400">Domains</span></h2>
@@ -1080,7 +1207,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
             whileHover={{ y: -15, scale: 1.02 }}
             onClick={() => {
               setActiveLayerId(layer.id);
-              setView('regional');
+              navigateToView('regional');
             }}
             className="glass group p-10 rounded-[3rem] border-white/5 hover:border-white/20 transition-all text-center space-y-8 relative overflow-hidden"
           >
@@ -1117,8 +1244,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
           transition={{ delay: URBAN_LAYERS.length * 0.1 }}
           whileHover={{ y: -15, scale: 1.02 }}
           onClick={() => {
-            setActiveModule('construction');
-            setView('map');
+            navigateToView('map', 'construction');
           }}
           className="glass group p-10 rounded-[3rem] border-white/5 hover:border-white/20 transition-all text-center space-y-8 relative overflow-hidden"
         >
@@ -1147,8 +1273,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
           transition={{ delay: (URBAN_LAYERS.length + 1) * 0.1 }}
           whileHover={{ y: -15, scale: 1.02 }}
           onClick={() => {
-            setActiveModule('lighting');
-            setView('map');
+            navigateToView('map', 'lighting');
           }}
           className="glass group p-10 rounded-[3rem] border-white/5 hover:border-white/20 transition-all text-center space-y-8 relative overflow-hidden"
         >
@@ -1169,9 +1294,185 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
             <div className="w-8 h-1 bg-white/10 rounded-full group-hover:w-16 group-hover:bg-white/40 transition-all duration-500" />
           </div>
         </motion.button>
+
+        <motion.button
+          key="travel"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: (URBAN_LAYERS.length + 2) * 0.1 }}
+          whileHover={{ y: -15, scale: 1.02 }}
+          onClick={() => navigateToView('travel')}
+          className="glass group p-10 rounded-[3rem] border-white/5 hover:border-white/20 transition-all text-center space-y-8 relative overflow-hidden"
+        >
+          <div className="absolute inset-0 bg-gradient-to-b from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+          <div className="w-24 h-24 mx-auto rounded-[2rem] flex items-center justify-center transition-all duration-500 shadow-2xl bg-emerald-500/20 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-black group-hover:shadow-[0_0_30px_rgba(16,185,129,0.5)]">
+            <CalendarDays className="w-12 h-12" />
+          </div>
+          <div className="relative z-10">
+            <h3 className="text-2xl font-black uppercase tracking-tight italic">Travel Planner</h3>
+            <p className="text-[10px] text-white/40 mt-3 font-bold uppercase tracking-widest leading-relaxed">
+              Find the best time for your journey
+            </p>
+          </div>
+          <div className="pt-4 flex justify-center">
+            <div className="w-8 h-1 bg-white/10 rounded-full group-hover:w-16 group-hover:bg-white/40 transition-all duration-500" />
+          </div>
+        </motion.button>
       </div>
     </div>
   );
+
+  const renderTravelPlanner = () => {
+    const modeOptions = [
+      { id: 'car' as const, label: 'Car', icon: Car },
+      { id: 'transit' as const, label: 'Public transport', icon: Bus },
+      { id: 'taxi' as const, label: 'Taxi', icon: Car },
+      { id: 'train' as const, label: 'Train', icon: Train },
+      { id: 'walking' as const, label: 'Walking', icon: Footprints },
+      { id: 'bicycle' as const, label: 'Bicycle', icon: Bike },
+    ];
+
+    return (
+      <div className="flex flex-col h-full relative z-10 p-8 md:p-12 space-y-8 overflow-y-auto custom-scrollbar">
+        <div className="flex items-center space-x-6">
+          <button onClick={() => navigateToView('categories')} className="glass p-4 rounded-2xl hover:bg-white/10 transition-all border-white/5">
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-[0.4em] text-white/40 mb-2">Journey Intelligence</p>
+            <h2 className="text-4xl md:text-5xl font-black italic uppercase tracking-tighter">Best Time <span className="text-emerald-400">to Travel</span></h2>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.7fr)] gap-8 max-w-7xl w-full mx-auto">
+          <form onSubmit={findBestTravelTime} className="glass rounded-[2.5rem] p-6 md:p-8 border-white/5 space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] gap-3 items-end">
+              <label className="space-y-2">
+                <span className="text-[9px] font-black uppercase tracking-widest text-white/40">Source</span>
+                <input required value={travelSource} onChange={(event) => setTravelSource(event.target.value)} placeholder="Starting location" className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-500/50 transition-all" />
+              </label>
+              <button type="button" onClick={swapTravelLocations} aria-label="Swap source and destination" className="glass p-3 rounded-xl hover:bg-white/10 transition-all border-white/5 mb-0.5">
+                <ArrowLeftRight className="w-4 h-4 text-emerald-400" />
+              </button>
+              <label className="space-y-2">
+                <span className="text-[9px] font-black uppercase tracking-widest text-white/40">Destination</span>
+                <input required value={travelDestination} onChange={(event) => setTravelDestination(event.target.value)} placeholder="Where are you going?" className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-500/50 transition-all" />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <label className="space-y-2">
+                <span className="text-[9px] font-black uppercase tracking-widest text-white/40">Travelling range — start date</span>
+                <input required type="date" value={travelStartDate} onChange={(event) => setTravelStartDate(event.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-500/50 transition-all [color-scheme:dark]" />
+              </label>
+              <label className="space-y-2">
+                <span className="text-[9px] font-black uppercase tracking-widest text-white/40">Travelling range — end date</span>
+                <input required type="date" min={travelStartDate} value={travelEndDate} onChange={(event) => setTravelEndDate(event.target.value)} className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-500/50 transition-all [color-scheme:dark]" />
+              </label>
+            </div>
+
+            <div className="space-y-3">
+              <span className="text-[9px] font-black uppercase tracking-widest text-white/40">Travel mode</span>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {modeOptions.map(({ id, label, icon: Icon }) => (
+                  <button type="button" key={id} onClick={() => setTravelMode(id)} className={cn("rounded-xl px-3 py-3 flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-wider transition-all border", travelMode === id ? "bg-emerald-500 text-black border-emerald-400" : "bg-white/5 text-white/50 border-white/5 hover:text-white hover:border-white/20")}>
+                    <Icon className="w-4 h-4" /> {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button type="submit" className="w-full bg-emerald-500 text-black rounded-xl py-4 text-xs font-black uppercase tracking-[0.25em] hover:bg-emerald-400 transition-all">
+              Find Best Day and Time
+            </button>
+            <p className="text-[10px] text-white/25 leading-relaxed">Recommendations currently use a local route heuristic. Connect a live routing provider later for traffic-aware estimates.</p>
+          </form>
+
+          <div className="space-y-6">
+            {travelRecommendation ? (
+              <>
+                <div className="glass rounded-[2.5rem] p-7 border-emerald-500/30 bg-emerald-500/5 space-y-6">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] font-black uppercase tracking-[0.3em] text-emerald-400">Best day and departure</span>
+                    <Clock className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-white/50">{travelRecommendation.day}, {travelRecommendation.date}</p>
+                    <p className="text-5xl font-black italic tracking-tighter mt-1">{travelRecommendation.departure}</p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3 border-t border-white/10 pt-5">
+                    <div><p className="text-[8px] text-white/30 uppercase tracking-widest">Journey</p><p className="font-black mt-1">{travelRecommendation.duration}</p></div>
+                    <div><p className="text-[8px] text-white/30 uppercase tracking-widest">Traffic</p><p className="font-black mt-1 text-emerald-400">{travelRecommendation.traffic}</p></div>
+                    <div><p className="text-[8px] text-white/30 uppercase tracking-widest">Arrival</p><p className="font-black mt-1">{travelRecommendation.arrival}</p></div>
+                  </div>
+                </div>
+                <div className="glass rounded-[2.5rem] p-7 border-white/5 space-y-3">
+                  <p className="text-[9px] font-black uppercase tracking-[0.3em] text-white/40">Why this time?</p>
+                  <p className="text-sm text-white/65 leading-relaxed">{travelRecommendation.explanation}</p>
+                </div>
+              </>
+            ) : (
+              <div className="glass rounded-[2.5rem] p-8 border-white/5 min-h-[260px] flex flex-col items-center justify-center text-center space-y-4">
+                <CalendarDays className="w-10 h-10 text-emerald-400/60" />
+                <p className="text-xs font-black uppercase tracking-widest text-white/50">Your recommendation will appear here</p>
+                <p className="text-xs text-white/30 max-w-xs">Enter a route and choose your preferred travel mode to compare departure windows.</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {travelRecommendation && (
+          <div className="max-w-7xl w-full mx-auto space-y-6">
+            <div className="glass rounded-[2.5rem] p-7 border-white/5">
+              <div className="flex items-center justify-between mb-5">
+                <div>
+                  <p className="text-[9px] font-black uppercase tracking-[0.3em] text-white/40">Travel range calendar</p>
+                  <h3 className="text-xl font-black uppercase italic tracking-tight mt-1">Days evaluated</h3>
+                </div>
+                <CalendarDays className="w-5 h-5 text-emerald-400" />
+              </div>
+              <div className="grid grid-cols-7 gap-2 mb-2">
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+                  <span key={day} className="text-center text-[8px] font-black uppercase tracking-widest text-white/25">{day}</span>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+                {travelRecommendation.evaluatedDates.map((candidate) => {
+                  const isBest = candidate.date === travelRecommendation.date;
+                  const date = new Date(`${candidate.date}T12:00:00`);
+                  return (
+                    <div key={candidate.date} className={cn("rounded-xl p-3 text-center border transition-all", isBest ? "bg-emerald-500 text-black border-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.2)]" : "bg-white/5 border-white/5 text-white/60")}>
+                      <p className="text-[9px] font-black uppercase tracking-widest">{date.toLocaleDateString('en-IN', { weekday: 'short' })}</p>
+                      <p className="text-lg font-black mt-1">{date.getDate()}</p>
+                      <p className={cn("text-[8px] uppercase tracking-widest mt-1", isBest ? "text-black/60" : "text-white/25")}>{isBest ? 'Best day' : 'Available'}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="glass rounded-[2.5rem] p-7 border-white/5">
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-[0.3em] text-white/40">Alternative times</p>
+                <h3 className="text-xl font-black uppercase italic tracking-tight mt-1">Compare departures</h3>
+              </div>
+              <span className="text-[9px] font-black uppercase tracking-widest text-white/30">{travelMode}</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {travelRecommendation.alternatives.map((alternative) => (
+                <div key={alternative.departure} className="bg-white/5 border border-white/5 rounded-xl p-4 flex items-center justify-between">
+                  <div><p className="text-lg font-black">{alternative.departure}</p><p className="text-[9px] text-white/35 uppercase tracking-widest">{alternative.duration}</p></div>
+                  <span className={cn("text-[9px] font-black uppercase tracking-widest", alternative.traffic === 'Low' ? "text-emerald-400" : "text-amber-400")}>{alternative.traffic}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const renderRegional = () => {
     const data = filteredData;
@@ -1204,7 +1505,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
         </AnimatePresence>
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-8">
-            <button onClick={() => setView('categories')} className="glass p-4 rounded-2xl hover:bg-white/10 transition-all border-white/5">
+            <button onClick={() => navigateToView('categories')} className="glass p-4 rounded-2xl hover:bg-white/10 transition-all border-white/5">
               <ChevronLeft className="w-6 h-6" />
             </button>
             <div>
@@ -1568,12 +1869,17 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
             {renderRegional()}
           </motion.div>
         )}
+        {view === 'travel' && (
+          <motion.div key="travel" initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -30 }} className="h-full">
+            {renderTravelPlanner()}
+          </motion.div>
+        )}
         {view === 'map' && (
           <motion.div key="map" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full relative z-10 pointer-events-none">
             {/* Top Command Bar */}
             <header className="absolute top-0 left-0 right-0 z-50 h-20 px-8 flex items-center justify-between pointer-events-none">
               <div className="flex items-center space-x-12 pointer-events-auto">
-                <button onClick={() => setView('landing')} className="flex items-center space-x-3 group">
+                <button onClick={() => navigateToView('landing')} className="flex items-center space-x-3 group">
                   <div className="w-10 h-10 glass rounded-xl flex items-center justify-center border-emerald-500/30 group-hover:bg-emerald-500 group-hover:text-black transition-all">
                     <Globe className="w-6 h-6 text-emerald-400 group-hover:text-inherit" />
                   </div>
@@ -1649,7 +1955,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                 {/* Module Switcher: Urban Layers vs Construction Monitoring */}
                 <div className="glass rounded-2xl p-1 flex items-center gap-1 border-white/5 ui-module-tabs">
                   <button
-                    onClick={() => setActiveModule('urban')}
+                    onClick={() => navigateToView('map', 'urban')}
                     className={cn(
                       "ui-module-tab flex items-center justify-center space-x-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
                       activeModule === 'urban' ? "bg-emerald-500 text-black" : "text-white/40 hover:text-white/70"
@@ -1659,7 +1965,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                     <span>Urban Layers</span>
                   </button>
                   <button
-                    onClick={() => setActiveModule('construction')}
+                    onClick={() => navigateToView('map', 'construction')}
                     className={cn(
                       "ui-module-tab flex items-center justify-center space-x-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
                       activeModule === 'construction' ? "bg-emerald-500 text-black" : "text-white/40 hover:text-white/70"
@@ -1670,7 +1976,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                   </button>
                   <button
                     onClick={() => {
-                      setActiveModule('reservoirs');
+                      navigateToView('map', 'reservoirs');
                       setSelectedLakeName(null);
                     }}
                     className={cn(
@@ -1682,7 +1988,7 @@ RECOMMENDATION: Implement integrated smart city response system coordinating tra
                     <span>Reservoirs</span>
                   </button>
                   <button
-                    onClick={() => setActiveModule('lighting')}
+                    onClick={() => navigateToView('map', 'lighting')}
                     className={cn(
                       "ui-module-tab flex items-center justify-center space-x-2 px-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
                       activeModule === 'lighting' ? "bg-emerald-500 text-black" : "text-white/40 hover:text-white/70"
